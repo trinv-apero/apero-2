@@ -13,16 +13,10 @@ import { RabbitMQClient } from '../../services/rabbitmq';
 import { JsonAIMessageHandler, JsonRpcMessageHandler } from '../../utils/message-handler';
 import { JsonAIResponse } from '../../types/jsonai';
 import { AgentEmitter } from '../../events/eventEmitter';
-import { GLOBAL_CONFIG } from '../../config';
+import { videoLiteConfig, rabbitMQConfig } from '../../config';
 
 const rabbitMQClient = RabbitMQClient.getInstance();
 rabbitMQClient.connect();
-
-const CONFIG = {
-	targetService: 'ai-core-video-lite',
-	targetFeature: 'video-lite',
-	ttlMessage: 1000 * 60 * 10, // 5 mins
-};
 
 export enum VideoStatus {
 	QUEUEING = 'queueing',
@@ -283,16 +277,16 @@ export class VideoLite implements INodeType {
 					...item,
 					videoId,
 					videoStatus: VideoStatus.QUEUEING,
-					targetFeature: CONFIG.targetFeature,
+					targetFeature: videoLiteConfig.targetFeature,
 					expectOutputPath: makeOutputDirPath({
 						fileInput: item.file || '',
-						targetService: CONFIG.targetService,
-						targetFeature: CONFIG.targetFeature,
+						targetService: videoLiteConfig.targetService,
+						targetFeature: videoLiteConfig.targetFeature,
 						correlationId,
 					}),
 				});
 
-				await rabbitMQClient.consumeQueue(GLOBAL_CONFIG.queueOneTime, async (message) => {
+				await rabbitMQClient.consumeQueue(rabbitMQConfig.queueOneTime, async (message) => {
 					if (message) {
 						const response = (await JsonAIMessageHandler.parseAndValidateMessage(
 							message.content as Buffer,
@@ -304,10 +298,10 @@ export class VideoLite implements INodeType {
 
 				const success = await rabbitMQClient.publish(
 					message,
-					GLOBAL_CONFIG.requestExchange,
-					CONFIG.targetService,
+					rabbitMQConfig.requestExchange,
+					videoLiteConfig.targetService,
 					{
-						replyTo: GLOBAL_CONFIG.queueOneTime,
+						replyTo: rabbitMQConfig.queueOneTime,
 						correlationId,
 					},
 				);
@@ -319,7 +313,7 @@ export class VideoLite implements INodeType {
 				const timeout = setTimeout(() => {
 					this.logger.error(`${VideoLite.name} timeout`);
 					reject(new Error(`${VideoLite.name} timeout`));
-				}, CONFIG.ttlMessage);
+				}, videoLiteConfig.ttlMessage);
 
 				const handleResponse = (response: JsonAIResponse) => {
 					console.log(`${VideoLite.name} response received`, {

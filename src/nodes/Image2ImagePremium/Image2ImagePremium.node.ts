@@ -13,16 +13,10 @@ import { RabbitMQClient } from '../../services/rabbitmq';
 import { JsonAIMessageHandler, JsonRpcMessageHandler } from '../../utils/message-handler';
 import { JsonAIResponse } from '../../types/jsonai';
 import { AgentEmitter } from '../../events/eventEmitter';
-import { GLOBAL_CONFIG } from '../../config';
+import { image2ImageConfig, rabbitMQConfig } from '../../config';
 
 const rabbitMQClient = RabbitMQClient.getInstance();
 rabbitMQClient.connect();
-
-const CONFIG = {
-	targetService: 'ai-core-art-premium', // routing key
-	targetFeature: 'image2image', // options
-	ttlMessage: 1000 * 60 * 5, // 5 mins
-};
 
 type Image2ImagePremiumInput = {
 	file: string;
@@ -169,7 +163,7 @@ export class Image2ImagePremium implements INodeType {
 					applyPulid: item.applyPulid,
 				};
 
-				await rabbitMQClient.consumeQueue(GLOBAL_CONFIG.queueOneTime, async (message) => {
+				await rabbitMQClient.consumeQueue(rabbitMQConfig.queueOneTime, async (message) => {
 					if (message) {
 						const response = (await JsonAIMessageHandler.parseAndValidateMessage(
 							message.content as Buffer,
@@ -181,21 +175,21 @@ export class Image2ImagePremium implements INodeType {
 
 				const message = JsonRpcMessageHandler.compressMessage({
 					...input,
-					targetFeature: CONFIG.targetFeature,
+					targetFeature: image2ImageConfig.targetFeature,
 					expectOutputPath: makeOutputDirPath({
 						fileInput: item.file,
-						targetService: CONFIG.targetService,
-						targetFeature: CONFIG.targetFeature,
+						targetService: image2ImageConfig.targetService,
+						targetFeature: image2ImageConfig.targetFeature,
 						correlationId,
 					}),
 				});
 
 				const success = await rabbitMQClient.publish(
 					message,
-					GLOBAL_CONFIG.requestExchange,
-					CONFIG.targetService,
+					rabbitMQConfig.requestExchange,
+					image2ImageConfig.targetService,
 					{
-						replyTo: GLOBAL_CONFIG.queueOneTime,
+						replyTo: rabbitMQConfig.queueOneTime,
 						correlationId,
 					},
 				);
@@ -207,12 +201,9 @@ export class Image2ImagePremium implements INodeType {
 				const timeout = setTimeout(() => {
 					this.logger.error(`${Image2ImagePremium.name} timeout`);
 					reject(new Error(`${Image2ImagePremium.name} timeout`));
-				}, CONFIG.ttlMessage);
+				}, image2ImageConfig.ttlMessage);
 
 				const handleResponse = (response: JsonAIResponse) => {
-					// console.log(`${Image2ImagePremium.name} response received`, {
-					// 	response,
-					// });
 					if (response.errorMessage) {
 						reject(new Error(response.errorMessage));
 						image2imageEmitter.off(correlationId, handleResponse);

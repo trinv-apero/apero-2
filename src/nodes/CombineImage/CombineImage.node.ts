@@ -13,16 +13,10 @@ import { RabbitMQClient } from '../../services/rabbitmq';
 import { JsonAIMessageHandler, JsonRpcMessageHandler } from '../../utils/message-handler';
 import { JsonAIResponse } from '../../types/jsonai';
 import { combineImageEmitter } from '../../events/eventEmitter';
-import { GLOBAL_CONFIG } from '../../config';
+import { combineImageConfig, rabbitMQConfig } from '../../config';
 
 const rabbitMQClient = RabbitMQClient.getInstance();
 rabbitMQClient.connect();
-
-const CONFIG = {
-	targetService: 'ai-core-outpainting',
-	targetFeature: 'combineImages',
-	ttlMessage: 1000 * 60, // 1 min
-};
 
 export class CombineImage implements INodeType {
 	description: INodeTypeDescription = {
@@ -89,7 +83,7 @@ export class CombineImage implements INodeType {
 					prompt: item.prompt,
 				};
 
-				await rabbitMQClient.consumeQueue(GLOBAL_CONFIG.queueOneTime, async (message) => {
+				await rabbitMQClient.consumeQueue(rabbitMQConfig.queueOneTime, async (message) => {
 					if (message) {
 						const response = (await JsonAIMessageHandler.parseAndValidateMessage(
 							message.content as Buffer,
@@ -101,21 +95,21 @@ export class CombineImage implements INodeType {
 
 				const message = JsonRpcMessageHandler.compressMessage({
 					...input,
-					targetFeature: CONFIG.targetFeature,
+					targetFeature: combineImageConfig.targetFeature,
 					expectOutputPath: makeOutputDirPath({
 						fileInput: item.file,
-						targetService: CONFIG.targetService,
-						targetFeature: CONFIG.targetFeature,
+						targetService: combineImageConfig.targetService,
+						targetFeature: combineImageConfig.targetFeature,
 						correlationId,
 					}),
 				});
 
 				const success = await rabbitMQClient.publish(
 					message,
-					GLOBAL_CONFIG.requestExchange,
-					CONFIG.targetService,
+					rabbitMQConfig.requestExchange,
+					combineImageConfig.targetService,
 					{
-						replyTo: GLOBAL_CONFIG.queueOneTime,
+						replyTo: rabbitMQConfig.queueOneTime,
 						correlationId,
 					},
 				);
@@ -127,7 +121,7 @@ export class CombineImage implements INodeType {
 				const timeout = setTimeout(() => {
 					this.logger.error(`${CombineImage.name} timeout`);
 					reject(new Error(`${CombineImage.name} timeout`));
-				}, CONFIG.ttlMessage);
+				}, combineImageConfig.ttlMessage);
 
 				const handleResponse = (response: JsonAIResponse) => {
 					console.log(`${CombineImage.name} response received`, {
@@ -145,7 +139,7 @@ export class CombineImage implements INodeType {
 					}
 				};
 
-				combineImageEmitter.once(correlationId, handleResponse);
+				combineImageEmitter.on(correlationId, handleResponse);
 			});
 		};
 
