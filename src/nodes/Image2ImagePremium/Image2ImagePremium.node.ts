@@ -261,7 +261,7 @@ export class Image2ImagePremium implements INodeType {
 			});
 		}
 
-		console.log(Image2ImagePremium.name, 'Completed', returnData);
+		console.log('🎨', Image2ImagePremium.name, '✅ Completed', returnData);
 
 		return [returnData];
 	}

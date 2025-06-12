@@ -1,22 +1,11 @@
 import {
-	IDataObject,
-	type IExecuteFunctions,
-	type INodeExecutionData,
-	type INodeType,
 	type INodeTypeDescription,
 	NodeConnectionType,
-	NodeOperationError,
 } from 'n8n-workflow';
-import { v4 as uuidv4 } from 'uuid';
-import { makeOutputDirPath } from '../../utils/helper';
-import { RabbitMQClient } from '../../services/rabbitmq';
-import { JsonAIMessageHandler, JsonRpcMessageHandler } from '../../utils/message-handler';
-import { JsonAIResponse } from '../../types/jsonai';
+import { EventEmitter } from 'events';
+import { BaseNode } from '../BaseNode';
+import { videoLiteConfig } from '../../config';
 import { AgentEmitter } from '../../events/eventEmitter';
-import { videoLiteConfig, rabbitMQConfig } from '../../config';
-
-const rabbitMQClient = RabbitMQClient.getInstance();
-rabbitMQClient.connect();
 
 export enum VideoStatus {
 	QUEUEING = 'queueing',
@@ -54,8 +43,8 @@ export interface VideoLiteRequest {
 	seed?: number;
 }
 
-export class VideoLite implements INodeType {
-	description: INodeTypeDescription = {
+export class VideoLite extends BaseNode {
+	public readonly description: INodeTypeDescription = {
 		displayName: 'VideoLite',
 		name: 'videoLite',
 		icon: 'file:video-lite.svg',
@@ -249,136 +238,9 @@ export class VideoLite implements INodeType {
 				default: '',
 				description: 'Additional processing options',
 			},
-			{
-				displayName: 'Enable Assistant',
-				name: 'enableAssistant',
-				type: 'boolean',
-				default: false,
-				description: 'Whether to enable AI assistant',
-			},
-			{
-				displayName: 'Seed',
-				name: 'seed',
-				type: 'number',
-				default: -1,
-				description: 'Seed for reproducible results',
-			},
 		],
 	};
 
-	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-		const processItem = (item: VideoLiteRequest) => {
-			return new Promise(async (resolve, reject) => {
-				const videoLiteEmitter = new AgentEmitter();
-				const correlationId = uuidv4();
-				const videoId = uuidv4();
-
-				const message = JsonRpcMessageHandler.compressMessage({
-					...item,
-					videoId,
-					videoStatus: VideoStatus.QUEUEING,
-					targetFeature: videoLiteConfig.targetFeature,
-					expectOutputPath: makeOutputDirPath({
-						fileInput: item.file || '',
-						targetService: videoLiteConfig.targetService,
-						targetFeature: videoLiteConfig.targetFeature,
-						correlationId,
-					}),
-				});
-
-				await rabbitMQClient.consumeQueue(rabbitMQConfig.queueOneTime, async (message) => {
-					if (message) {
-						const response = (await JsonAIMessageHandler.parseAndValidateMessage(
-							message.content as Buffer,
-						)) as JsonAIResponse;
-						const correlationId = message.properties.correlationId;
-						videoLiteEmitter.emit(correlationId, response);
-					}
-				});
-
-				const success = await rabbitMQClient.publish(
-					message,
-					rabbitMQConfig.requestExchange,
-					videoLiteConfig.targetService,
-					{
-						replyTo: rabbitMQConfig.queueOneTime,
-						correlationId,
-					},
-				);
-
-				if (!success) {
-					throw new NodeOperationError(this.getNode(), 'Failed to publish message to RabbitMQ');
-				}
-
-				const timeout = setTimeout(() => {
-					this.logger.error(`${VideoLite.name} timeout`);
-					reject(new Error(`${VideoLite.name} timeout`));
-				}, videoLiteConfig.ttlMessage);
-
-				const handleResponse = (response: JsonAIResponse) => {
-					console.log(`${VideoLite.name} response received`, {
-						response,
-					});
-
-					if (response.videoStatus === VideoStatus.COMPLETED) {
-						clearTimeout(timeout);
-						videoLiteEmitter.off(correlationId, handleResponse);
-						resolve(response?.resultFile);
-						return;
-					}
-
-					if (response.errorMessage) {
-						reject(new Error(response.errorMessage));
-						videoLiteEmitter.off(correlationId, handleResponse);
-						return;
-					}
-				};
-
-				videoLiteEmitter.on(correlationId, handleResponse);
-			});
-		};
-
-		const items = this.getInputData();
-		const returnData: INodeExecutionData[] = [];
-
-		for (let i = 0; i < items.length; i++) {
-			const input: VideoLiteRequest = {
-				file: this.getNodeParameter('file', i) as string,
-				file2: this.getNodeParameter('file2', i) as string,
-				mode: this.getNodeParameter('mode', i) as string,
-				morphFiles: (this.getNodeParameter('morphFiles', i) as string).split(','),
-				positivePrompt: this.getNodeParameter('positivePrompt', i) as string,
-				negativePrompt: this.getNodeParameter('negativePrompt', i) as string,
-				backgroundPrompt: this.getNodeParameter('backgroundPrompt', i) as string,
-				frameNumber: this.getNodeParameter('frameNumber', i) as number,
-				frameRate: this.getNodeParameter('frameRate', i) as number,
-				width: this.getNodeParameter('width', i) as number,
-				height: this.getNodeParameter('height', i) as number,
-				guidanceScale: this.getNodeParameter('guidanceScale', i) as number,
-				steps: this.getNodeParameter('steps', i) as number,
-				imageSize: this.getNodeParameter('imageSize', i) as number,
-				useImageCaption: this.getNodeParameter('useImageCaption', i) as boolean,
-				useFrameInterpolation: this.getNodeParameter('useFrameInterpolation', i) as boolean,
-				enableSwapface: this.getNodeParameter('enableSwapface', i) as boolean,
-				enableInpaint: this.getNodeParameter('enableInpaint', i) as boolean,
-				upscalerXTimes: this.getNodeParameter('upscalerXTimes', i) as number,
-				loraName: this.getNodeParameter('loraName', i) as string,
-				additionalOptions: (this.getNodeParameter('additionalOptions', i) as string).split(','),
-				enableAssistant: this.getNodeParameter('enableAssistant', i) as boolean,
-				seed: this.getNodeParameter('seed', i) as number,
-			};
-
-			const response = await processItem(input);
-
-			returnData.push({
-				json: {
-					response: response as IDataObject,
-				},
-			});
-		}
-
-		console.log(VideoLite.name, 'Completed', returnData);
-
-		return [returnData];
-	}
+	protected readonly config = videoLiteConfig;
+	protected readonly emitter = AgentEmitter as unknown as EventEmitter;
 }
